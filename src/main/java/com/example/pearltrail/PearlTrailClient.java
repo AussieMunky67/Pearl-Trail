@@ -9,25 +9,38 @@ import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 /**
  * Client-side mod: every ender pearl you can see (yours or other players') leaves a
- * purple particle trail along its flight path. Each particle lives exactly 5 seconds.
+ * purple particle trail along its flight path. The whole trail stays visible while the
+ * pearl flies and disappears 3 seconds after the pearl lands.
  */
 public class PearlTrailClient implements ClientModInitializer {
-    private static final int TRAIL_LIFETIME_TICKS = 100;  // 5 seconds
-    private static final double SPACING = 0.3;             // blocks between particles
+    private static final int LINGER_TICKS = 60;          // 3 seconds after landing
+    private static final int REEMIT_INTERVAL = 4;        // redraw the trail every 4 ticks
+    private static final int PARTICLE_LIFETIME = 8;      // short life, longer than the interval so there's no flicker
+    private static final double SPACING = 0.3;           // blocks between trail points
+    private static final int MAX_POINTS = 800;           // safety cap per trail
     private static final int PURPLE = 0xAA00FF;
     private static final DustParticleOptions PURPLE_DUST = new DustParticleOptions(PURPLE, 1.0f);
 
-    /** Last known position per pearl entity id. */
-    private final Map<Integer, double[]> lastPos = new HashMap<>();
+    private static final class Trail {
+        final List<double[]> points = new ArrayList<>();
+        double lastX, lastY, lastZ;
+        boolean hasLast;
+        long landedAt = -1;   // client tick when the pearl disappeared, -1 while still flying
+    }
+
+    private final Map<Integer, Trail> trails = new HashMap<>();
     private ClientLevel lastLevel;
+    private long tickCounter;
 
     @Override
     public void onInitializeClient() {
@@ -37,51 +50,76 @@ public class PearlTrailClient implements ClientModInitializer {
     private void tick(Minecraft mc) {
         ClientLevel level = mc.level;
         if (level == null) {
-            lastPos.clear();
+            trails.clear();
             lastLevel = null;
             return;
         }
         if (level != lastLevel) {
-            lastPos.clear();
+            trails.clear();
             lastLevel = level;
         }
+        tickCounter++;
 
+        // 1) extend trails of pearls that are still flying
         Set<Integer> seen = new HashSet<>();
         for (Entity e : level.entitiesForRendering()) {
             if (!"ender_pearl".equals(EntityType.getKey(e.getType()).getPath())) continue;
 
             int id = e.getId();
             seen.add(id);
-            double x = e.getX(), y = e.getY(), z = e.getZ();
+            Trail t = trails.computeIfAbsent(id, k -> new Trail());
+            addSegment(t, e.getX(), e.getY(), e.getZ());
+        }
 
-            double[] prev = lastPos.get(id);
-            if (prev == null) {
-                spawn(mc, x, y, z);
-            } else {
-                double dx = x - prev[0], dy = y - prev[1], dz = z - prev[2];
-                double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                if (dist > 1.0E-4 && dist < 128.0) {
-                    int steps = Math.max(1, (int) Math.ceil(dist / SPACING));
-                    for (int i = 1; i <= steps; i++) {
-                        double f = (double) i / steps;
-                        spawn(mc, prev[0] + dx * f, prev[1] + dy * f, prev[2] + dz * f);
+        // 2) pearls that vanished have landed: start the 3 second countdown
+        for (Map.Entry<Integer, Trail> entry : trails.entrySet()) {
+            Trail t = entry.getValue();
+            if (!seen.contains(entry.getKey()) && t.landedAt < 0) {
+                t.landedAt = tickCounter;
+            }
+        }
+
+        // 3) drop trails that have been landed for 3 seconds
+        Iterator<Map.Entry<Integer, Trail>> it = trails.entrySet().iterator();
+        while (it.hasNext()) {
+            Trail t = it.next().getValue();
+            if (t.landedAt >= 0 && tickCounter - t.landedAt >= LINGER_TICKS) {
+                it.remove();
+            }
+        }
+
+        // 4) redraw the surviving trails
+        if (tickCounter % REEMIT_INTERVAL == 0) {
+            for (Trail t : trails.values()) {
+                for (double[] p : t.points) {
+                    Particle particle = mc.particleEngine.createParticle(PURPLE_DUST, p[0], p[1], p[2], 0.0, 0.0, 0.0);
+                    if (particle != null) {
+                        particle.setLifetime(PARTICLE_LIFETIME);
                     }
                 }
             }
-            lastPos.put(id, new double[] {x, y, z});
-        }
-
-        // forget pearls that have landed / despawned
-        Iterator<Integer> it = lastPos.keySet().iterator();
-        while (it.hasNext()) {
-            if (!seen.contains(it.next())) it.remove();
         }
     }
 
-    private static void spawn(Minecraft mc, double x, double y, double z) {
-        Particle p = mc.particleEngine.createParticle(PURPLE_DUST, x, y, z, 0.0, 0.0, 0.0);
-        if (p != null) {
-            p.setLifetime(TRAIL_LIFETIME_TICKS);
+    /** Adds evenly spaced points from the last position to (x,y,z) so fast pearls leave a solid line. */
+    private static void addSegment(Trail t, double x, double y, double z) {
+        if (!t.hasLast) {
+            t.points.add(new double[] {x, y, z});
+            t.lastX = x; t.lastY = y; t.lastZ = z;
+            t.hasLast = true;
+            return;
         }
+        double dx = x - t.lastX, dy = y - t.lastY, dz = z - t.lastZ;
+        double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist < 1.0E-4 || dist > 128.0) {
+            t.lastX = x; t.lastY = y; t.lastZ = z;
+            return;
+        }
+        int steps = Math.max(1, (int) Math.ceil(dist / SPACING));
+        for (int i = 1; i <= steps && t.points.size() < MAX_POINTS; i++) {
+            double f = (double) i / steps;
+            t.points.add(new double[] {t.lastX + dx * f, t.lastY + dy * f, t.lastZ + dz * f});
+        }
+        t.lastX = x; t.lastY = y; t.lastZ = z;
     }
 }

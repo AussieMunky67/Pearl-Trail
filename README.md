@@ -13,3 +13,5 @@ Requires Minecraft 26.2, Fabric Loader and Fabric API. Java 25.
 
 ## Publishing on Modrinth
 Create a project, upload the jar, loader = Fabric, game version = 26.2, add Fabric API as a required dependency, and set the environment to "Client".
+
+## HOW TO INSTALL

@@ -24,8 +24,8 @@ import java.util.Set;
  */
 public class PearlTrailClient implements ClientModInitializer {
     private static final int LINGER_TICKS = 60;          // 3 seconds after landing
-    private static final int REEMIT_INTERVAL = 1;        // redraw the trail every 4 ticks
-    private static final int PARTICLE_LIFETIME = 2;      // short life, longer than the interval so there's no flicker
+    private static final int REEMIT_INTERVAL = 1;        // redraw the trail every tick so it never pulses
+    private static final int PARTICLE_LIFETIME = 2;      // very short life so each tick looks identical
     private static final double SPACING = 0.5;           // blocks between trail points
     private static final int MAX_POINTS = 500;           // safety cap per trail
     private static final int PURPLE = 0xAA00FF;
@@ -91,7 +91,15 @@ public class PearlTrailClient implements ClientModInitializer {
         // 4) redraw the surviving trails
         if (tickCounter % REEMIT_INTERVAL == 0) {
             for (Trail t : trails.values()) {
-                for (double[] p : t.points) {
+                // After landing, the trail wipes away from the start (where it was thrown)
+                // to the end (where it landed) over the 3 second linger time.
+                int skip = 0;
+                if (t.landedAt >= 0) {
+                    double progress = (double) (tickCounter - t.landedAt) / LINGER_TICKS;
+                    skip = (int) Math.floor(Math.min(1.0, progress) * t.points.size());
+                }
+                for (int i = skip; i < t.points.size(); i++) {
+                    double[] p = t.points.get(i);
                     Particle particle = mc.particleEngine.createParticle(PURPLE_DUST, p[0], p[1], p[2], 0.0, 0.0, 0.0);
                     if (particle != null) {
                         particle.setLifetime(PARTICLE_LIFETIME);

@@ -23,7 +23,9 @@ import java.util.Set;
  * pearl flies and disappears 3 seconds after the pearl lands.
  */
 public class PearlTrailClient implements ClientModInitializer {
-    private static final int LINGER_TICKS = 60;          // 3 seconds after landing
+    private static final int HOLD_TICKS = 60;            // full trail stays 3 seconds after landing
+    private static final int WIPE_TICKS = 30;            // then it wipes away start-to-end over 1.5 seconds
+    private static final int LANDED_AFTER_MISSING = 3;   // pearl must be gone 3 ticks in a row to count as landed
     private static final int REEMIT_INTERVAL = 1;        // redraw the trail every tick so it never pulses
     private static final int PARTICLE_LIFETIME = 2;      // very short life so each tick looks identical
     private static final double SPACING = 0.5;           // blocks between trail points
@@ -36,6 +38,7 @@ public class PearlTrailClient implements ClientModInitializer {
         double lastX, lastY, lastZ;
         boolean hasLast;
         long landedAt = -1;   // client tick when the pearl disappeared, -1 while still flying
+        int missingTicks = 0; // consecutive ticks the pearl has not been seen
     }
 
     private final Map<Integer, Trail> trails = new HashMap<>();
@@ -71,19 +74,25 @@ public class PearlTrailClient implements ClientModInitializer {
             addSegment(t, e.getX(), e.getY(), e.getZ());
         }
 
-        // 2) pearls that vanished have landed: start the 3 second countdown
+        // 2) pearls that stay gone for a few ticks in a row have landed: start the countdown
         for (Map.Entry<Integer, Trail> entry : trails.entrySet()) {
             Trail t = entry.getValue();
-            if (!seen.contains(entry.getKey()) && t.landedAt < 0) {
-                t.landedAt = tickCounter;
+            if (seen.contains(entry.getKey())) {
+                t.missingTicks = 0;
+                t.landedAt = -1;   // pearl is (still) flying
+            } else {
+                t.missingTicks++;
+                if (t.missingTicks >= LANDED_AFTER_MISSING && t.landedAt < 0) {
+                    t.landedAt = tickCounter - t.missingTicks;   // moment it actually disappeared
+                }
             }
         }
 
-        // 3) drop trails that have been landed for 3 seconds
+        // 3) drop trails once the hold time and the wipe are both over
         Iterator<Map.Entry<Integer, Trail>> it = trails.entrySet().iterator();
         while (it.hasNext()) {
             Trail t = it.next().getValue();
-            if (t.landedAt >= 0 && tickCounter - t.landedAt >= LINGER_TICKS) {
+            if (t.landedAt >= 0 && tickCounter - t.landedAt >= HOLD_TICKS + WIPE_TICKS) {
                 it.remove();
             }
         }
@@ -91,12 +100,15 @@ public class PearlTrailClient implements ClientModInitializer {
         // 4) redraw the surviving trails
         if (tickCounter % REEMIT_INTERVAL == 0) {
             for (Trail t : trails.values()) {
-                // After landing, the trail wipes away from the start (where it was thrown)
-                // to the end (where it landed) over the 3 second linger time.
+                // The full trail stays for 3 seconds after landing, then wipes away from the
+                // start (where it was thrown) to the end (where it landed).
                 int skip = 0;
                 if (t.landedAt >= 0) {
-                    double progress = (double) (tickCounter - t.landedAt) / LINGER_TICKS;
-                    skip = (int) Math.floor(Math.min(1.0, progress) * t.points.size());
+                    long sinceHoldEnded = tickCounter - t.landedAt - HOLD_TICKS;
+                    if (sinceHoldEnded > 0) {
+                        double progress = Math.min(1.0, (double) sinceHoldEnded / WIPE_TICKS);
+                        skip = (int) Math.floor(progress * t.points.size());
+                    }
                 }
                 for (int i = skip; i < t.points.size(); i++) {
                     double[] p = t.points.get(i);

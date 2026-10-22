@@ -24,10 +24,10 @@ import java.util.Set;
  */
 public class PearlTrailClient implements ClientModInitializer {
     private static final int LINGER_TICKS = 60;          // 3 seconds after landing
-    private static final int REEMIT_INTERVAL = 4;        // redraw the trail every 4 ticks
-    private static final int PARTICLE_LIFETIME = 8;      // short life, longer than the interval so there's no flicker
-    private static final double SPACING = 0.3;           // blocks between trail points
-    private static final int MAX_POINTS = 800;           // safety cap per trail
+    private static final int REEMIT_INTERVAL = 1;        // redraw the trail every 4 ticks
+    private static final int PARTICLE_LIFETIME = 2;      // short life, longer than the interval so there's no flicker
+    private static final double SPACING = 0.5;           // blocks between trail points
+    private static final int MAX_POINTS = 500;           // safety cap per trail
     private static final int PURPLE = 0xAA00FF;
     private static final DustParticleOptions PURPLE_DUST = new DustParticleOptions(PURPLE, 1.0f);
 
